@@ -1,4 +1,4 @@
-/max31865
+mikesmitty/max31865
 ====================
 
 This is a library for using the [MAX31865](https://datasheets.maximintegrated.com/en/ds/MAX31865.pdf) PT100/PT1000 RTD temperature sensor amplifier in Go using [Periph](https://periph.io). Originally based on the [vemo-france/max31865](https://github.com/vemo-france/max31865) port of [Adafruit's MAX31865 library](https://github.com/adafruit/Adafruit_MAX31865), though it has been fairly substantially rewritten. Intended for use with Adafruit's MAX31865 breakout boards [PT100](https://www.adafruit.com/product/3328)/[PT1000](https://www.adafruit.com/product/3648) on any device supported by [Periph](https://periph.io/device/).
