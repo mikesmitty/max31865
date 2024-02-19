@@ -112,14 +112,6 @@ func (d *Dev) Sense(e *physic.Env) error {
 // It's the responsibility of the caller to retrieve the values from the
 // channel as fast as possible, otherwise the interval may not be respected.
 func (d *Dev) SenseContinuous(interval time.Duration) (<-chan physic.Env, error) {
-	// FIXME - start here
-
-	// FIXME: move this into sensecontinuous shutdown logic
-	// Disable bias to lower power consumption
-	if err := d.enableBias(false); err != nil {
-		return nil, d.wrap(err)
-	}
-
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.stop != nil {
@@ -189,7 +181,7 @@ func (d *Dev) sense(e *physic.Env) error {
 		return d.wrap(err)
 	}
 
-	e.Temperature = physic.Temperature(temp)*physic.Celsius + physic.ZeroCelsius
+	e.Temperature = physic.Temperature(temp)*1000*physic.MilliCelsius + physic.ZeroCelsius
 
 	return nil
 }
