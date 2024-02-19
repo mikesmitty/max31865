@@ -10,7 +10,7 @@ const (
 type WireCount int
 
 const (
-	WireCount2 WireCount = iota
+	WireCount2 WireCount = iota + 2
 	WireCount3
 	WireCount4
 )
@@ -33,22 +33,12 @@ const (
 )
 
 const (
-	faultHighThresh uint8 = 0x80
-	faultLowThresh  uint8 = 0x40
-	faultRefInLow   uint8 = 0x20
-	faultRefInHigh  uint8 = 0x10
-	faultRtdInLow   uint8 = 0x08
-	faultOvUv       uint8 = 0x04
-)
-
-const (
-	configBias      uint8 = 0x80
-	configModeAuto  uint8 = 0x40
-	configModeOff   uint8 = 0x00
-	config1Shot     uint8 = 0x20
-	config24Wire    uint8 = 0x00
-	config3Wire     uint8 = 0x10
-	configFaultStat uint8 = 0x02
-	configFilt50Hz  uint8 = 0x01
-	configFilt60Hz  uint8 = 0x00
+	configFlagFilter50Hz        uint8 = iota // D0 in the datasheet
+	configFlagFaultClear                     // D1
+	configFlagFaultDetectCycleB              // D2
+	configFlagFaultDetectCycleA              // D3
+	configFlagWireCount                      // D4
+	configFlagOneShot                        // D5
+	configFlagContinuousMode                 // D6
+	configFlagBiasVoltage                    // D7
 )

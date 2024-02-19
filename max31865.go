@@ -16,6 +16,12 @@ import (
 
 // Opts holds various configuration options for the sensor
 type Opts struct {
+	// ContinuousMode removes delays by leaving the bias voltage enabled between
+	// readings. This slightly increases power consumption and self-heating, but
+	// is useful when taking measurements as quickly as possible (< 55/66ms)
+	ContinuousMode bool
+	// 60Hz noise is filtered by default, enable to filter 50Hz noise instead.
+	Filter50Hz  bool
 	Port        string
 	RefResistor float64
 	RTDType     RTDType
@@ -48,11 +54,25 @@ func New(p spi.Port, opts *Opts) (*Dev, error) {
 		return nil, fmt.Errorf("max31865: %v", err)
 	}
 
+	if opts == nil {
+		opts = DefaultOptions()
+	}
+
 	d := &Dev{
-		d:         c,
-		opts:      *opts,
-		name:      p.String(),
-		measDelay: 65 * time.Millisecond,
+		d:    c,
+		opts: *opts,
+		name: p.String(),
+	}
+
+	switch {
+	case opts.Filter50Hz && opts.ContinuousMode:
+		d.measDelay = 21 * time.Millisecond
+	case opts.ContinuousMode:
+		d.measDelay = 18 * time.Millisecond
+	case opts.Filter50Hz:
+		d.measDelay = 66 * time.Millisecond
+	default:
+		d.measDelay = 55 * time.Millisecond
 	}
 
 	switch opts.RTDType {
@@ -64,15 +84,26 @@ func New(p spi.Port, opts *Opts) (*Dev, error) {
 		return nil, fmt.Errorf("max31865: invalid RTD type: %v", opts.RTDType)
 	}
 
+	// Disable bias voltage when not in use to slightly reduce self-heating
+	if err := d.setConfigFlag(configFlagBiasVoltage, d.opts.ContinuousMode); err != nil {
+		return nil, d.wrap(err)
+	}
+
+	// Enable/disable hardware continuous mode
+	if err := d.setConfigFlag(configFlagContinuousMode, d.opts.ContinuousMode); err != nil {
+		return nil, d.wrap(err)
+	}
+
+	// Filter 50Hz/60Hz noise (defaults to 60Hz)
+	if err := d.setConfigFlag(configFlagFilter50Hz, d.opts.Filter50Hz); err != nil {
+		return nil, d.wrap(err)
+	}
+
 	// Set wire count (either 3 or 2/4)
-	err = d.writeConfig(config3Wire, opts.WireCount != WireCount3)
+	err = d.setConfigFlag(configFlagWireCount, opts.WireCount == WireCount3)
 	if err != nil {
 		return nil, fmt.Errorf("max31865: %v", err)
 	}
-
-	// Disable bias when not in use to reduce self-heating
-	d.enableBias(false)
-	d.clearFault()
 
 	return d, nil
 }
@@ -101,7 +132,7 @@ func (d *Dev) Sense(e *physic.Env) error {
 		return d.wrap(errors.New("already sensing continuously"))
 	}
 
-	return d.sense(e)
+	return d.sense(e, d.opts.ContinuousMode)
 }
 
 // SenseContinuous returns measurements as °C on a continuous basis.
@@ -155,25 +186,34 @@ func (d *Dev) Halt() error {
 	return nil
 }
 
-func (d *Dev) sense(e *physic.Env) error {
+func (d *Dev) sense(e *physic.Env, continuousMode bool) error {
 	d.clearFault()
-	d.enableBias(true)
-	// Need 10ms for bias voltage startup.
-	time.Sleep(10 * time.Millisecond)
 
-	if err := d.writeConfig(config1Shot); err != nil {
-		return d.wrap(err)
+	if !continuousMode {
+		// Enable bias voltage and wait 10ms to stabilize
+		if err := d.setConfigFlag(configFlagBiasVoltage, true); err != nil {
+			return d.wrap(err)
+		}
+		time.Sleep(10 * time.Millisecond)
+
+		// Trigger one-shot reading
+		if err := d.setConfigFlag(configFlagOneShot, true); err != nil {
+			return d.wrap(err)
+		}
+
+		time.Sleep(d.measDelay)
 	}
-	time.Sleep(d.measDelay)
 
 	var result [2]byte
 	if err := d.readReg(rtdMsbReg, result[:]); err != nil {
 		return d.wrap(err)
 	}
 
-	// Disable bias current again to reduce selfheating.
-	if err := d.enableBias(false); err != nil {
-		return d.wrap(err)
+	if !continuousMode {
+		// Disable bias current again to reduce self-heating.
+		if err := d.setConfigFlag(configFlagBiasVoltage, false); err != nil {
+			return d.wrap(err)
+		}
 	}
 
 	temp, err := d.parseTemperature(result[:])
@@ -230,6 +270,10 @@ func (d *Dev) parseTemperature(data []byte) (float64, error) {
 }
 
 func (d *Dev) sensingContinuous(interval time.Duration, sensing chan<- physic.Env, stop <-chan struct{}) {
+	// Ensure the interval is at least the minimum measurement delay.
+	if interval < d.measDelay {
+		interval = d.measDelay
+	}
 	t := time.NewTicker(interval)
 	defer t.Stop()
 
@@ -238,7 +282,7 @@ func (d *Dev) sensingContinuous(interval time.Duration, sensing chan<- physic.En
 		// Do one initial sensing right away.
 		e := physic.Env{}
 		d.mu.Lock()
-		err = d.sense(&e)
+		err = d.sense(&e, d.opts.ContinuousMode)
 		d.mu.Unlock()
 		if err != nil {
 			log.Printf("%s: failed to sense: %v", d, err)
@@ -258,40 +302,32 @@ func (d *Dev) sensingContinuous(interval time.Duration, sensing chan<- physic.En
 }
 
 func (d *Dev) clearFault() error {
-	var b [1]byte
-	if err := d.readReg(configReg, b[:]); err != nil {
+	var b [2]byte
+	if err := d.readReg(configReg, b[1:]); err != nil {
 		return d.wrap(err)
 	}
-	b[0] &= ^uint8(0x2C)
-	b[0] |= configFaultStat
+	// Clear bits 5, 3, 2 (one-shot plus fault status bits) and set bit 1 to clear fault
+	b[1] &= ^byte(0x2C)
+	b[1] |= configFlagFaultClear
 
 	return d.writeCommands(b[:])
 }
 
-func (d *Dev) enableBias(b bool) error {
-	var err error
-	if b {
-		d.writeConfig(configBias)
-	} else {
-		d.writeConfig(configBias, true)
-	}
-
-	return err
-}
-
-func (d *Dev) readFault() uint8 {
+func (d *Dev) readFault() (uint8, error) {
+	// TODO - enable fault detection
 	var b [1]byte
-	d.readReg(faultStatReg, b[:])
-	return b[0]
+	err := d.readReg(faultStatReg, b[:])
+	if err != nil {
+		return b[0], d.wrap(err)
+	}
+	return b[0], nil
 }
 
 func (d *Dev) readReg(reg uint8, b []byte) error {
-	// MSB is 0 for write and 1 for read.
 	read := make([]byte, len(b)+1)
 	write := make([]byte, len(read))
 
-	// Rest of the write buffer is ignored.
-	write[0] = reg
+	write[0] = reg & 0x7F
 	if err := d.d.Tx(write, read); err != nil {
 		return d.wrap(err)
 	}
@@ -300,25 +336,28 @@ func (d *Dev) readReg(reg uint8, b []byte) error {
 	return nil
 }
 
-// writeConfig writes a config setting to the device.
-//
-// Warning: b may be modified!
-func (d *Dev) writeConfig(b byte, invert ...bool) error {
-	var config [1]byte
-	if err := d.readReg(configReg, config[:]); err != nil {
+// Gets a config flag bit.
+func (d *Dev) getConfigFlag(config uint8, flag uint8) bool {
+	val := config & (1 << flag)
+	return (val > 0)
+}
+
+// Sets a config flag bit to on or off.
+func (d *Dev) setConfigFlag(flag uint8, on bool) error {
+	var result [1]byte
+	if err := d.readReg(configReg, result[:]); err != nil {
 		return d.wrap(err)
 	}
 
-	if len(invert) > 0 && invert[0] {
-		config[0] &= ^b
+	if on {
+		result[0] |= (1 << flag)
 	} else {
-		config[0] |= b
+		result[0] &= ^(1 << flag)
 	}
-	if err := d.writeCommands(config[:]); err != nil {
-		return d.wrap(err)
-	}
-
-	return nil
+	var config [2]byte
+	config[0] = configReg
+	config[1] = result[0]
+	return d.writeCommands(config[:])
 }
 
 // writeCommands writes a command to the device.
