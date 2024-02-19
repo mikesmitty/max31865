@@ -1,14 +1,14 @@
-vemo-france/max31865
+/max31865
 ====================
 
-This is a golang/periph port of [Adafruit's MAX31865 library](https://github.com/adafruit/Adafruit_MAX31865). It's used to drive a [MAX31865 ic](https://datasheets.maximintegrated.com/en/ds/MAX31865.pdf) or board such as [Adafruit's MAX31865 breakout board](https://www.adafruit.com/product/3328) on any device supported by [periph](https://github.com/google/periph). That ic is a PT100/PT1000 (precision temperature sensor) amplifier.
+This is a library for using the [MAX31865](https://datasheets.maximintegrated.com/en/ds/MAX31865.pdf) PT100/PT1000 RTD temperature sensor amplifier in Go using [Periph](https://periph.io). Originally based on the [vemo-france/max31865](https://github.com/vemo-france/max31865) port of [Adafruit's MAX31865 library](https://github.com/adafruit/Adafruit_MAX31865), though it has been fairly substantially rewritten. Intended for use with Adafruit's MAX31865 breakout boards [PT100](https://www.adafruit.com/product/3328)/[PT1000](https://www.adafruit.com/product/3648) on any device supported by [Periph](https://periph.io/device/).
 
 
 Installation
 ------------
 
 ````
-go get github.com/vemo-france/max31865
+go get github.com/mikesmitty/max31865
 ````
 
 Usage
@@ -19,30 +19,32 @@ package main
 
 import (
 	"fmt"
-	"log"
 
-	"github.com/vemo-france/max31865"
+	"github.com/mikesmitty/max31865"
+	"periph.io/x/conn/v3/spi/spireg"
+	"periph.io/x/host/v3"
 )
 
 func main() {
+	sb, _ := spireg.Open(yourSpiBus)
+	dev, _ := max31865.New(sb, max31865.AdafruitPT100())
 
-	if err := max31865.Init(); err != nil {
-		log.Fatalf("initialization failed : %s", err)
+	// Perform a one-off reading with Sense()
+	var e physic.Env
+	_ := dev.Sense(&e)
+	fmt.Printf("Temperature: %0.2f\n", e.Temperature.Celsius())
+
+	// Alternatively, SenseContinuous() returns a channel for continuous updates
+	c, _ := dev.SenseContinuous(updateInterval)
+	for {
+		e := <-c
+		fmt.Printf("Temperature: %0.2f\n", e.Temperature.Celsius())
 	}
-
-	// pass in pin names as defined in periph
-	sensor := max31865.Create("8", "9", "10", "11")
-
-	// 100 is sensor's resistance at 0°C in ohms (PT100 -> 100, PT1000 -> 1000)
-	// 430 is reference resistance in ohms (430 for adafruit's board)
-	temp := sensor.ReadTemperature(100, 430)
-
-	fmt.Printf("Temperature is %f°C\n", temp)
 }
 ````
 
 TODO
 ----
-
-- Handle 2, 3 et 4 wires sensors
-- Create and ReadTemperature can fail, so we should return `( ??, error)` to handle that
+[ ] Improve documentation
+[ ] Add tests
+[ ] Surface hardware fault error codes rather than just clearing them like the Adafruit library does
