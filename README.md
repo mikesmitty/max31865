@@ -45,6 +45,6 @@ func main() {
 
 TODO
 ----
-[ ] Improve documentation
-[ ] Add tests
-[ ] Surface hardware fault error codes rather than just clearing them like the Adafruit library does
+- [ ] Improve documentation
+- [ ] Add tests
+- [ ] Surface hardware fault error codes rather than just clearing them like the Adafruit library does
