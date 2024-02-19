@@ -181,7 +181,7 @@ func (d *Dev) sense(e *physic.Env) error {
 		return d.wrap(err)
 	}
 
-	e.Temperature = physic.Temperature(temp)*1000*physic.MilliCelsius + physic.ZeroCelsius
+	e.Temperature = physic.Temperature(temp*1000)*physic.MilliCelsius + physic.ZeroCelsius
 
 	return nil
 }
