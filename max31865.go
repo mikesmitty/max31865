@@ -3,7 +3,6 @@ package max31865
 import (
 	"errors"
 	"fmt"
-	"log"
 	"math"
 	"strings"
 	"sync"
@@ -84,6 +83,11 @@ func New(p spi.Port, opts *Opts) (*Dev, error) {
 		return nil, fmt.Errorf("max31865: invalid RTD type: %v", opts.RTDType)
 	}
 
+	// Clear any existing fault flags
+	if err := d.clearFault(); err != nil {
+		return nil, d.wrap(err)
+	}
+
 	// Disable bias voltage when not in use to slightly reduce self-heating
 	if err := d.setConfigFlag(configFlagBiasVoltage, d.opts.ContinuousMode); err != nil {
 		return nil, d.wrap(err)
@@ -100,9 +104,13 @@ func New(p spi.Port, opts *Opts) (*Dev, error) {
 	}
 
 	// Set wire count (either 3 or 2/4)
-	err = d.setConfigFlag(configFlagWireCount, opts.WireCount == WireCount3)
-	if err != nil {
-		return nil, fmt.Errorf("max31865: %v", err)
+	if err := d.setConfigFlag(configFlagWireCount, opts.WireCount == WireCount3); err != nil {
+		return nil, d.wrap(err)
+	}
+
+	// Set resistance error thresholds
+	if err := d.setThreshold(0x0000, 0xFFFF); err != nil {
+		return nil, d.wrap(err)
 	}
 
 	return d, nil
@@ -216,17 +224,17 @@ func (d *Dev) sense(e *physic.Env, continuousMode bool) error {
 		}
 	}
 
-	temp, err := d.parseTemperature(result[:])
-	if err != nil {
+	temp := d.parseTemperature(result[:])
+	e.Temperature = physic.Temperature(temp*1000)*physic.MilliCelsius + physic.ZeroCelsius
+
+	if err := d.CheckError(); err != nil {
 		return d.wrap(err)
 	}
-
-	e.Temperature = physic.Temperature(temp*1000)*physic.MilliCelsius + physic.ZeroCelsius
 
 	return nil
 }
 
-func (d *Dev) parseTemperature(data []byte) (float64, error) {
+func (d *Dev) parseTemperature(data []byte) float64 {
 	rtd := (uint16(data[0]) << 8) | uint16(data[1])
 
 	// Clear fault flag
@@ -247,7 +255,7 @@ func (d *Dev) parseTemperature(data []byte) (float64, error) {
 	temp = (math.Sqrt(temp) + Z1) / Z4
 
 	if temp >= 0 {
-		return temp, nil
+		return temp
 	}
 
 	// Normalize to 100 ohm
@@ -266,7 +274,7 @@ func (d *Dev) parseTemperature(data []byte) (float64, error) {
 	rpoly = rpoly * Rt // ^5
 	temp = temp + (1.5243e-10 * rpoly)
 
-	return temp, nil
+	return temp
 }
 
 func (d *Dev) sensingContinuous(interval time.Duration, sensing chan<- physic.Env, stop <-chan struct{}) {
@@ -285,7 +293,6 @@ func (d *Dev) sensingContinuous(interval time.Duration, sensing chan<- physic.En
 		err = d.sense(&e, d.opts.ContinuousMode)
 		d.mu.Unlock()
 		if err != nil {
-			log.Printf("%s: failed to sense: %v", d, err)
 			return
 		}
 		select {
@@ -301,20 +308,35 @@ func (d *Dev) sensingContinuous(interval time.Duration, sensing chan<- physic.En
 	}
 }
 
+func (d *Dev) CheckError() error {
+	fault, err := d.readFault()
+	if err != nil {
+		return err
+	}
+	switch {
+	case d.getFlagBit(fault, 7):
+		return fmt.Errorf("fault detected (0x%0x): rtd resistance value > high threshold register", fault)
+	case d.getFlagBit(fault, 6):
+		return fmt.Errorf("fault detected (0x%0x): rtd resistance value < low threshold register", fault)
+	}
+	return nil
+}
+
 func (d *Dev) clearFault() error {
 	var b [2]byte
 	if err := d.readReg(configReg, b[1:]); err != nil {
 		return d.wrap(err)
 	}
+
 	// Clear bits 5, 3, 2 (one-shot plus fault status bits) and set bit 1 to clear fault
-	b[1] &= ^byte(0x2C)
-	b[1] |= configFlagFaultClear
+	config := b[1] | byte(0x2C)
+	config |= (1 << configFlagFaultClear)
+	b[1] = config
 
 	return d.writeCommands(b[:])
 }
 
 func (d *Dev) readFault() (uint8, error) {
-	// TODO - enable fault detection
 	var b [1]byte
 	err := d.readReg(faultStatReg, b[:])
 	if err != nil {
@@ -336,9 +358,22 @@ func (d *Dev) readReg(reg uint8, b []byte) error {
 	return nil
 }
 
+func (d *Dev) setThreshold(lower, upper uint16) error {
+	if err := d.writeCommands([]byte{lFaultLsbReg, byte(lower & 0xFF)}); err != nil {
+		return err
+	}
+	if err := d.writeCommands([]byte{lFaultMsbReg, byte(lower >> 8)}); err != nil {
+		return err
+	}
+	if err := d.writeCommands([]byte{hFaultLsbReg, byte(upper & 0xFF)}); err != nil {
+		return err
+	}
+	return d.writeCommands([]byte{hFaultMsbReg, byte(upper >> 8)})
+}
+
 // Gets a config flag bit.
-func (d *Dev) getConfigFlag(config uint8, flag uint8) bool {
-	val := config & (1 << flag)
+func (d *Dev) getFlagBit(b uint8, flag uint8) bool {
+	val := b & (1 << flag)
 	return (val > 0)
 }
 
@@ -349,10 +384,11 @@ func (d *Dev) setConfigFlag(flag uint8, on bool) error {
 		return d.wrap(err)
 	}
 
+	newConfig := result[0]
 	if on {
-		result[0] |= (1 << flag)
+		newConfig |= (1 << flag)
 	} else {
-		result[0] &= ^(1 << flag)
+		newConfig &= ^(1 << flag)
 	}
 	var config [2]byte
 	config[0] = configReg
