@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/mikesmitty/max31865"
@@ -13,6 +14,7 @@ import (
 
 func main() {
 	bus := flag.String("bus", "", "Name of the bus")
+	devFlag := flag.String("type", "", "Sensor type (PT100 or PT1000)")
 	flag.Parse()
 
 	_, err := host.Init()
@@ -25,7 +27,18 @@ func main() {
 		log.Fatal(err)
 	}
 
-	dev, err := max31865.New(sb, max31865.AdafruitPT100())
+	devType := strings.ToLower(*devFlag)
+	var opts *max31865.Opts
+	switch devType {
+	case "pt100":
+		opts = max31865.AdafruitPT100()
+	case "pt1000":
+		opts = max31865.AdafruitPT1000()
+	default:
+		log.Fatal("Invalid sensor type")
+	}
+
+	dev, err := max31865.New(sb, opts)
 	if err != nil {
 		log.Fatal(err)
 	}

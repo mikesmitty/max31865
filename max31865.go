@@ -109,7 +109,7 @@ func New(p spi.Port, opts *Opts) (*Dev, error) {
 	}
 
 	// Set resistance error thresholds
-	if err := d.setThreshold(0x0000, 0xFFFF); err != nil {
+	if err := d.SetThreshold(0x0000, 0xFFFF); err != nil {
 		return nil, d.wrap(err)
 	}
 
@@ -315,9 +315,9 @@ func (d *Dev) CheckError() error {
 	}
 	switch {
 	case d.getFlagBit(fault, 7):
-		return fmt.Errorf("fault detected (0x%0x): rtd resistance value > high threshold register", fault)
+		return fmt.Errorf("fault detected (%#0x): rtd resistance value > high threshold register", fault)
 	case d.getFlagBit(fault, 6):
-		return fmt.Errorf("fault detected (0x%0x): rtd resistance value < low threshold register", fault)
+		return fmt.Errorf("fault detected (%#0x): rtd resistance value < low threshold register", fault)
 	}
 	return nil
 }
@@ -358,7 +358,7 @@ func (d *Dev) readReg(reg uint8, b []byte) error {
 	return nil
 }
 
-func (d *Dev) setThreshold(lower, upper uint16) error {
+func (d *Dev) SetThreshold(lower, upper uint16) error {
 	if err := d.writeCommands([]byte{lFaultLsbReg, byte(lower & 0xFF)}); err != nil {
 		return err
 	}
@@ -392,7 +392,7 @@ func (d *Dev) setConfigFlag(flag uint8, on bool) error {
 	}
 	var config [2]byte
 	config[0] = configReg
-	config[1] = result[0]
+	config[1] = newConfig
 	return d.writeCommands(config[:])
 }
 
