@@ -53,6 +53,10 @@ func New(p spi.Port, opts *Opts) (*Dev, error) {
 		return nil, fmt.Errorf("max31865: %v", err)
 	}
 
+	// Due to the normalization in parseTemperature, specifying the RTD type when using one
+	// of Adafruit's sensor boards is not necessary. The RTD to reference resistor ratio on
+	// both are the same, so the temperature calculations come out equal.
+	// If using a 2- or 4-wire RTD, the options must be set however.
 	if opts == nil {
 		opts = DefaultOptions()
 	}
